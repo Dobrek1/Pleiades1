@@ -154,19 +154,53 @@ namespace Pleiades.CoreSim
             return true;
         }
 
+        /// <summary>
+        /// Circularize around current center at current r: kill radial velocity and
+        /// set |v_tan|=v_circ (vector), not |v|~v_circ. Near a on an ellipse |v|~v_circ
+        /// so the old prograde-only burn was a no-op.
+        /// </summary>
         public bool TryCircularizeHere()
         {
             var o = Ship.Orbit;
-            var vCirc = AstroMath.CircularSpeed(o.Mu, o.RadiusM);
-            var need = vCirc - o.SpeedMps;
-            var abs = System.Math.Abs(need);
-            if (abs < 0.5) return true;
-            if (!Ship.TryBurn(abs, out _))
+            var r = o.RadiusM;
+            var vRad = (o.Rx * o.Vx + o.Rz * o.Vz) / r;
+            if (o.Eccentricity < 1e-3 && System.Math.Abs(vRad) < 0.5)
+                return true;
+
+            var vCirc = AstroMath.CircularSpeed(o.Mu, r);
+            var c = o.Rx / r;
+            var s = o.Rz / r;
+            // Preserve orbit sense (sign of angular momentum h = Rx Vz - Rz Vx).
+            var h = o.Rx * o.Vz - o.Rz * o.Vx;
+            double vxDes, vzDes;
+            if (h >= 0.0)
+            {
+                vxDes = -vCirc * s;
+                vzDes = vCirc * c;
+            }
+            else
+            {
+                vxDes = vCirc * s;
+                vzDes = -vCirc * c;
+            }
+
+            var dvx = vxDes - o.Vx;
+            var dvz = vzDes - o.Vz;
+            var need = System.Math.Sqrt(dvx * dvx + dvz * dvz);
+            if (need < 0.5)
+            {
+                o.SetCircularRadius(r);
+                return true;
+            }
+
+            if (!Ship.TryBurn(need, out _))
             {
                 RaiseInterrupt("Топливо: не хватает на циркуляризацию. Эллипс сохранён.");
                 return false;
             }
-            o.ApplyDeltaV(need, 0.0);
+
+            // Charge real |dv|, then snap to circular state at this r (peri=apo=r).
+            o.SetCircularRadius(r);
             return true;
         }
 
