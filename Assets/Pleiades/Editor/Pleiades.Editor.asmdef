@@ -1,0 +1,14 @@
+{
+    "name": "Pleiades.Editor",
+    "rootNamespace": "Pleiades.Editor",
+    "references": ["Pleiades"],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
