@@ -17,15 +17,15 @@ namespace Pleiades.CoreSim
     }
 
     /// <summary>
-    /// Sprint-1 barge «Ржавая баржа»: Isp 900 s, ~18 t LH2, LEO start.
-    /// Modules: frame, cabins×4, hold, engine, LH2 tank, radiator.
+    /// «Ржавая баржа» B+C: dry 20500 kg, LH2 23000 kg, Isp 900 s, LEO start.
+    /// Modules sum to dry (without payload).
     /// </summary>
     public sealed class SimShip
     {
         public string Name { get; } = "Ржавая баржа";
         public double IspSeconds { get; } = 900.0;
         public double FuelKg { get; private set; }
-        public double FuelCapacityKg { get; } = 18_000.0;
+        public double FuelCapacityKg { get; } = 23_000.0;
         public double PayloadKg { get; private set; }
 
         public IReadOnlyList<ShipModule> Modules { get; }
@@ -33,17 +33,18 @@ namespace Pleiades.CoreSim
 
         public SimShip()
         {
+            // Dry = 20500 kg (brief), not the old ~29 t stack.
             Modules = new List<ShipModule>
             {
-                new ShipModule("frame", "Каркас", 8_000.0),
-                new ShipModule("cabin1", "Каюта 1", 2_500.0),
-                new ShipModule("cabin2", "Каюта 2", 2_500.0),
-                new ShipModule("cabin3", "Каюта 3", 2_500.0),
-                new ShipModule("cabin4", "Каюта 4", 2_500.0),
-                new ShipModule("hold", "Трюм", 3_000.0),
-                new ShipModule("engine", "Двигатель", 4_500.0),
-                new ShipModule("lh2", "Бак LH2", 2_000.0),
-                new ShipModule("radiator", "Радиатор", 1_500.0),
+                new ShipModule("frame", "Каркас", 5_500.0),
+                new ShipModule("cabin1", "Каюта 1", 1_800.0),
+                new ShipModule("cabin2", "Каюта 2", 1_800.0),
+                new ShipModule("cabin3", "Каюта 3", 1_800.0),
+                new ShipModule("cabin4", "Каюта 4", 1_800.0),
+                new ShipModule("hold", "Трюм", 2_200.0),
+                new ShipModule("engine", "Двигатель", 3_200.0),
+                new ShipModule("lh2", "Бак LH2", 1_400.0),
+                new ShipModule("radiator", "Радиатор", 1_000.0),
             };
             FuelKg = FuelCapacityKg;
             PayloadKg = 0.0;

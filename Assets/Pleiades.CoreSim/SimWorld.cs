@@ -5,6 +5,7 @@ namespace Pleiades.CoreSim
         None = 0,
         Geo = 1,
         Lunar = 2,
+        Leo = 3,
     }
 
     public enum FlightPhase
@@ -83,23 +84,38 @@ namespace Pleiades.CoreSim
             WarpIndex = 0;
         }
 
+        /// <summary>
+        /// Geo (circ→circ): need total Δv. Lunar/Leo profile B: only departure burn;
+        /// circularize at destination is optional (C) and separate.
+        /// </summary>
+        public double RequiredDeltaVForDepart(DestinationId dest)
+        {
+            var transfer = PreviewTransfer(dest);
+            if (dest == DestinationId.Geo)
+                return transfer.TotalDeltaV;
+            return transfer.DepartureDeltaV;
+        }
+
         public bool CanDepart(DestinationId dest)
         {
             if (dest == DestinationId.None) return false;
             if (IsThrusting) return false;
-            var transfer = PreviewTransfer(dest);
-            return Ship.AvailableDeltaV >= transfer.TotalDeltaV - 1e-3;
+            var need = RequiredDeltaVForDepart(dest);
+            return Ship.AvailableDeltaV >= need - 1e-3;
         }
 
         public Hohmann.Transfer PreviewTransfer(DestinationId dest)
         {
             var r1 = Ship.Orbit.RadiusM;
+            var rLeo = GravityBody.Earth.RadiusM + 200_000.0;
             switch (dest)
             {
                 case DestinationId.Geo:
                     return Hohmann.Compute(GravityBody.Earth.Mu, r1, GravityBody.GeoStationaryRadiusM);
                 case DestinationId.Lunar:
                     return Hohmann.Compute(GravityBody.Earth.Mu, r1, GravityBody.MoonOrbitRadiusM);
+                case DestinationId.Leo:
+                    return Hohmann.Compute(GravityBody.Earth.Mu, r1, rLeo);
                 default:
                     return default;
             }
@@ -110,7 +126,12 @@ namespace Pleiades.CoreSim
             if (!CanDepart(dest))
             {
                 if (!HasInterrupt)
-                    RaiseInterrupt("Не хватает Δv на оба импульса Гомана (от текущего r)");
+                {
+                    var msg = dest == DestinationId.Geo
+                        ? "Не хватает Δv на оба импульса Гомана (от текущего r)"
+                        : "Не хватает Δv на уход (профиль B: циркуляризация отдельно)";
+                    RaiseInterrupt(msg);
+                }
                 return false;
             }
 
@@ -130,6 +151,22 @@ namespace Pleiades.CoreSim
             ActiveTransfer = transfer;
             TransferElapsed = 0.0;
             Phase = FlightPhase.Coast;
+            return true;
+        }
+
+        public bool TryCircularizeHere()
+        {
+            var o = Ship.Orbit;
+            var vCirc = AstroMath.CircularSpeed(o.Mu, o.RadiusM);
+            var need = vCirc - o.SpeedMps;
+            var abs = System.Math.Abs(need);
+            if (abs < 0.5) return true;
+            if (!Ship.TryBurn(abs, out _))
+            {
+                RaiseInterrupt("Топливо: не хватает на циркуляризацию. Эллипс сохранён.");
+                return false;
+            }
+            o.ApplyDeltaV(need, 0.0);
             return true;
         }
 
@@ -196,11 +233,12 @@ namespace Pleiades.CoreSim
             {
                 TransferElapsed += dt;
                 var target = ActiveTransfer.R2;
-                if (System.Math.Abs(r - target) / target < 0.02 && Ship.Orbit.Eccentricity < 0.08)
+                // Profile B: arrive on transfer ellipse when |r-R2|/R2 < 2% (no auto-circularize).
+                if (System.Math.Abs(r - target) / target < 0.02)
                 {
                     Destination = DestinationId.None;
                     Phase = FlightPhase.Arrived;
-                    RaiseInterrupt("У цели. Циркуляризуй ретро/проградом, если нужно.");
+                    RaiseInterrupt("У цели (эллипс). C — циркуляризовать здесь, если хватит Δv.");
                     WarpIndex = 0;
                 }
             }
@@ -232,6 +270,7 @@ namespace Pleiades.CoreSim
                 {
                     case DestinationId.Geo: return "ГСО";
                     case DestinationId.Lunar: return "Луна";
+                    case DestinationId.Leo: return "LEO";
                     default: return "свободный полёт";
                 }
             }

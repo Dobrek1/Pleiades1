@@ -86,10 +86,12 @@ namespace Pleiades
                 World.TryDepart(DestinationId.Geo);
             if (Input.GetKeyDown(KeyCode.L))
                 World.TryDepart(DestinationId.Lunar);
+            if (Input.GetKeyDown(KeyCode.H))
+                World.TryDepart(DestinationId.Leo);
             if (Input.GetKeyDown(KeyCode.F))
                 World.FollowShip = !World.FollowShip;
             if (Input.GetKeyDown(KeyCode.C))
-                Circularize();
+                World.TryCircularizeHere();
 
             if (Input.GetKeyDown(KeyCode.Escape) || Input.GetKeyDown(KeyCode.Return))
                 World.ClearInterrupt();
@@ -124,20 +126,6 @@ namespace Pleiades
             }
         }
 
-        void Circularize()
-        {
-            var o = World.Ship.Orbit;
-            var vCirc = AstroMath.CircularSpeed(o.Mu, o.RadiusM);
-            var sp = o.SpeedMps;
-            if (sp < 1e-6) return;
-            var need = vCirc - sp;
-            if (!World.Ship.TryBurn(System.Math.Abs(need), out _))
-            {
-                World.SetPaused(true);
-                return;
-            }
-            o.ApplyDeltaV(need, 0.0);
-        }
 
         void FollowCamera()
         {
