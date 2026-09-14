@@ -55,8 +55,8 @@ namespace Pleiades.CoreSim
         {
             Ship = new SimShip();
             SimTimeSeconds = 0.0;
-            Paused = false;
-            WarpIndex = 2;
+            Paused = true;
+            WarpIndex = 0;
             MoonAnomalyRad = 1.2;
         }
 
