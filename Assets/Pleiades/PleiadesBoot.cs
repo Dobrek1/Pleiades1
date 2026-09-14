@@ -3,10 +3,6 @@ using Pleiades.CoreSim;
 
 namespace Pleiades
 {
-    /// <summary>
-    /// Single entry MonoBehaviour: builds Play scene (camera, map, HUD, sim).
-    /// Attach to any GameObject in an empty scene, or use [RuntimeInitializeOnLoad].
-    /// </summary>
     public sealed class PleiadesBoot : MonoBehaviour
     {
         public static PleiadesBoot Instance { get; private set; }
@@ -43,7 +39,7 @@ namespace Pleiades
             Hud.Bind(World);
         }
 
-        void EnsureCamera()
+        static void EnsureCamera()
         {
             var cam = Camera.main;
             if (cam == null)
@@ -56,12 +52,11 @@ namespace Pleiades
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.02f, 0.03f, 0.06f);
             cam.orthographic = true;
-            // Earth radius ~6.37 uu; LEO frame — start zoomed to ~80 uu half-extent
-            cam.orthographicSize = 80f;
+            cam.orthographicSize = 24f;
             cam.transform.position = new Vector3(0f, 200f, 0f);
             cam.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
             cam.nearClipPlane = 0.1f;
-            cam.farClipPlane = 10000f;
+            cam.farClipPlane = 20000f;
         }
 
         void Update()
@@ -70,6 +65,7 @@ namespace Pleiades
             HandleInput();
             World.Tick(Time.unscaledDeltaTime);
             if (Map != null) Map.Refresh();
+            FollowCamera();
         }
 
         void HandleInput()
@@ -87,44 +83,75 @@ namespace Pleiades
                 World.SetWarpIndex(3);
 
             if (Input.GetKeyDown(KeyCode.G))
-                TryDepart(DestinationId.Geo);
+                World.TryDepart(DestinationId.Geo);
             if (Input.GetKeyDown(KeyCode.L))
-                TryDepart(DestinationId.Lunar);
+                World.TryDepart(DestinationId.Lunar);
+            if (Input.GetKeyDown(KeyCode.F))
+                World.FollowShip = !World.FollowShip;
+            if (Input.GetKeyDown(KeyCode.C))
+                Circularize();
 
             if (Input.GetKeyDown(KeyCode.Escape) || Input.GetKeyDown(KeyCode.Return))
                 World.ClearInterrupt();
 
+            var p = 0.0;
+            var r = 0.0;
+            if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow)) p += 1.0;
+            if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow)) p -= 1.0;
+            if (Input.GetKey(KeyCode.E)) r += 1.0;
+            if (Input.GetKey(KeyCode.Q)) r -= 1.0;
+            World.CmdPrograde = p;
+            World.CmdRadial = r;
+            World.Boost = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+
             var cam = Camera.main;
             if (cam == null) return;
 
-            float scroll = Input.mouseScrollDelta.y;
-            if (System.Math.Abs(scroll) > 0.01f)
+            var scroll = Input.mouseScrollDelta.y;
+            if (Mathf.Abs(scroll) > 0.01f)
             {
-                float size = cam.orthographicSize * (scroll > 0f ? 0.85f : 1.15f);
-                cam.orthographicSize = Mathf.Clamp(size, 8f, 800f);
+                var size = cam.orthographicSize * (scroll > 0f ? 0.85f : 1.15f);
+                cam.orthographicSize = Mathf.Clamp(size, 8f, 2500f);
             }
 
             if (Input.GetMouseButton(1))
             {
-                float dx = Input.GetAxis("Mouse X");
-                float dy = Input.GetAxis("Mouse Y");
-                float scale = cam.orthographicSize * 0.05f;
-                // Top-down +Y camera: pan in XZ
+                World.FollowShip = false;
+                var dx = Input.GetAxis("Mouse X");
+                var dy = Input.GetAxis("Mouse Y");
+                var scale = cam.orthographicSize * 0.05f;
                 cam.transform.position += new Vector3(-dx * scale, 0f, -dy * scale);
             }
         }
 
-        void TryDepart(DestinationId dest)
+        void Circularize()
         {
-            World.ClearInterrupt();
-            if (!World.TryDepart(dest))
+            var o = World.Ship.Orbit;
+            var vCirc = AstroMath.CircularSpeed(o.Mu, o.RadiusM);
+            var sp = o.SpeedMps;
+            if (sp < 1e-6) return;
+            var need = vCirc - sp;
+            if (!World.Ship.TryBurn(System.Math.Abs(need), out _))
             {
-                if (!World.HasInterrupt)
-                {
-                    // Soft fail without interrupt already raised
-                    World.SetPaused(true);
-                }
+                World.SetPaused(true);
+                return;
             }
+            o.ApplyDeltaV(need, 0.0);
+        }
+
+        void FollowCamera()
+        {
+            if (!World.FollowShip) return;
+            var cam = Camera.main;
+            if (cam == null) return;
+            World.Ship.Orbit.GetPositionMeters(out var x, out _, out var z);
+            var ux = (float)AstroMath.MetersToUnits(x);
+            var uz = (float)AstroMath.MetersToUnits(z);
+            var p = cam.transform.position;
+            cam.transform.position = new Vector3(
+                Mathf.Lerp(p.x, ux, 0.18f),
+                p.y,
+                Mathf.Lerp(p.z, uz, 0.18f));
         }
     }
 }
