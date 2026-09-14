@@ -15,6 +15,14 @@ namespace Pleiades.CoreSim
         Arrived,
     }
 
+    public struct SlotPlanResult
+    {
+        public bool Ok;
+        public string FailRu;
+        public OrbitSlot Slot;
+        public Hohmann.Transfer Transfer;
+    }
+
     /// <summary>
     /// Flight first: ship always coasts on a real ellipse. Hold thrust to fly.
     /// Hohmann buttons are optional planners, not the only way to move.
@@ -36,6 +44,12 @@ namespace Pleiades.CoreSim
         public DestinationId Destination { get; private set; } = DestinationId.None;
         public Hohmann.Transfer ActiveTransfer { get; private set; }
         public double TransferElapsed { get; private set; }
+
+        /// <summary>UI-selected orbit slot (preview only until TryDepartSelectedSlot).</summary>
+        public OrbitSlot SelectedSlot { get; private set; }
+
+        /// <summary>Display name from last slot depart; preferred by DestinationLabelRu.</summary>
+        string _activeDestinationRu = "";
 
         public string LastInterruptRu { get; private set; } = "";
         public bool HasInterrupt { get; private set; }
@@ -84,9 +98,50 @@ namespace Pleiades.CoreSim
             WarpIndex = 0;
         }
 
+        public void SelectSlot(OrbitSlot slot)
+        {
+            SelectedSlot = slot;
+        }
+
+        public SlotPlanResult PreviewSelectedSlot() => PreviewSlot(SelectedSlot);
+
+        public SlotPlanResult PreviewSlot(OrbitSlot slot)
+        {
+            var result = new SlotPlanResult { Slot = slot };
+            if (slot == null)
+            {
+                result.Ok = false;
+                result.FailRu = "Слот не выбран";
+                return result;
+            }
+
+            if (slot.Kind == OrbitSlotKind.MarkerOnly)
+            {
+                result.Ok = false;
+                result.FailRu = "Скоро / нет плана (маркер, не орбита)";
+                return result;
+            }
+
+            if (slot.Body != OrbitBodyId.Earth)
+            {
+                result.Ok = false;
+                result.FailRu = "Cross-body пока недоступен";
+                return result;
+            }
+
+            result.Transfer = Hohmann.Compute(
+                GravityBody.Earth.Mu,
+                Ship.Orbit.RadiusM,
+                slot.RadiusM);
+            result.Ok = true;
+            result.FailRu = "";
+            return result;
+        }
+
         /// <summary>
         /// Geo (circ→circ): need total Δv. Lunar/Leo profile B: only departure burn;
         /// circularize at destination is optional (C) and separate.
+        /// Layer 0 slot depart: always profile B (Δv1 only), including GSO.
         /// </summary>
         public double RequiredDeltaVForDepart(DestinationId dest)
         {
@@ -148,10 +203,80 @@ namespace Pleiades.CoreSim
             Ship.Orbit.ApplyDeltaV(dv, 0.0);
 
             Destination = dest;
+            _activeDestinationRu = "";
             ActiveTransfer = transfer;
             TransferElapsed = 0.0;
             Phase = FlightPhase.Coast;
             return true;
+        }
+
+        /// <summary>
+        /// Layer 0: apply only Δv1 (departure) toward SelectedSlot circular target.
+        /// Markers / null / insufficient fuel fail honestly.
+        /// </summary>
+        public bool TryDepartSelectedSlot()
+        {
+            var plan = PreviewSelectedSlot();
+            if (!plan.Ok)
+            {
+                if (!HasInterrupt)
+                    RaiseInterrupt(string.IsNullOrEmpty(plan.FailRu) ? "Нет плана" : plan.FailRu);
+                return false;
+            }
+
+            if (IsThrusting)
+            {
+                if (!HasInterrupt)
+                    RaiseInterrupt("Сбросьте тягу перед авто-уходом");
+                return false;
+            }
+
+            var transfer = plan.Transfer;
+            var need = transfer.DepartureDeltaV;
+            if (Ship.AvailableDeltaV < need - 1e-3)
+            {
+                if (!HasInterrupt)
+                    RaiseInterrupt("Не хватает Δv на уход (профиль B: циркуляризация отдельно)");
+                return false;
+            }
+
+            if (!Ship.TryBurn(transfer.DepartureDeltaV, out _))
+            {
+                RaiseInterrupt("Топливо: не хватает на уход");
+                return false;
+            }
+
+            var dv = transfer.R2 >= transfer.R1
+                ? transfer.DepartureDeltaV
+                : -transfer.DepartureDeltaV;
+            Ship.Orbit.ApplyDeltaV(dv, 0.0);
+
+            var slot = plan.Slot;
+            Destination = ClosestDestinationId(slot);
+            _activeDestinationRu = slot.DisplayNameRu;
+            ActiveTransfer = transfer;
+            TransferElapsed = 0.0;
+            Phase = FlightPhase.Coast;
+            return true;
+        }
+
+        static DestinationId ClosestDestinationId(OrbitSlot slot)
+        {
+            if (slot == null || slot.Kind != OrbitSlotKind.CircularAltitude)
+                return DestinationId.None;
+
+            var r = slot.RadiusM;
+            var rLeo = GravityBody.Earth.RadiusM + 200_000.0;
+            if (ApproxRadius(r, rLeo)) return DestinationId.Leo;
+            if (ApproxRadius(r, GravityBody.GeoStationaryRadiusM)) return DestinationId.Geo;
+            if (ApproxRadius(r, GravityBody.MoonOrbitRadiusM)) return DestinationId.Lunar;
+            return DestinationId.None;
+        }
+
+        static bool ApproxRadius(double a, double b)
+        {
+            var scale = System.Math.Max(System.Math.Abs(b), 1.0);
+            return System.Math.Abs(a - b) / scale < 1e-6;
         }
 
         /// <summary>
@@ -263,7 +388,11 @@ namespace Pleiades.CoreSim
                 RaiseInterrupt("Перицентр в атмосфере. Орбита поднята, чтобы не зарыться.");
             }
 
-            if (Destination != DestinationId.None && ActiveTransfer.TimeOfFlightSeconds > 0.0)
+            // Active plan: keyboard DestinationId and/or slot ActiveDestinationRu
+            // (parking/MEO may have Destination=None but still need arrival).
+            var hasPlan = ActiveTransfer.TimeOfFlightSeconds > 0.0
+                && (Destination != DestinationId.None || !string.IsNullOrEmpty(_activeDestinationRu));
+            if (hasPlan)
             {
                 TransferElapsed += dt;
                 var target = ActiveTransfer.R2;
@@ -271,6 +400,7 @@ namespace Pleiades.CoreSim
                 if (System.Math.Abs(r - target) / target < 0.02)
                 {
                     Destination = DestinationId.None;
+                    _activeDestinationRu = "";
                     Phase = FlightPhase.Arrived;
                     RaiseInterrupt("У цели (эллипс). C — циркуляризовать здесь, если хватит Δv.");
                     WarpIndex = 0;
@@ -300,6 +430,8 @@ namespace Pleiades.CoreSim
         {
             get
             {
+                if (!string.IsNullOrEmpty(_activeDestinationRu))
+                    return _activeDestinationRu;
                 switch (Destination)
                 {
                     case DestinationId.Geo: return "ГСО";

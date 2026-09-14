@@ -8,22 +8,19 @@ namespace Pleiades
         SimWorld _world;
         float _payloadSlider;
         float _debugFuelSlider = -1f;
-        int _planTarget; // 0 lunar, 1 geo, 2 leo
+        Vector2 _slotScroll;
         GUIStyle _title;
         GUIStyle _body;
         GUIStyle _warn;
         GUIStyle _debug;
         bool _stylesReady;
 
-        static readonly string[] PlanNames = { "Луна (орбита Земли на r_moon)", "ГСО", "LEO" };
-        static readonly DestinationId[] PlanIds = { DestinationId.Lunar, DestinationId.Geo, DestinationId.Leo };
-
         public void Bind(SimWorld world)
         {
             _world = world;
             _payloadSlider = 0f;
             _debugFuelSlider = -1f;
-            _planTarget = 0;
+            _slotScroll = Vector2.zero;
         }
 
         void EnsureStyles()
@@ -62,13 +59,14 @@ namespace Pleiades
 
             const float pad = 12f;
             var w = 420f;
-            GUI.Box(new Rect(pad, pad, w, 560f), GUIContent.none);
+            const float boxH = 700f;
+            GUI.Box(new Rect(pad, pad, w, boxH), GUIContent.none);
 
             float y = pad + 8f;
             var x = pad + 10f;
             const float line = 20f;
 
-            GUI.Label(new Rect(x, y, w - 20f, 24f), "ПЛЕЯДЫ — полёт + планер", _title);
+            GUI.Label(new Rect(x, y, w - 20f, 24f), "ПЛЕЯДЫ — Слоты орбит (Layer 0)", _title);
             y += line + 6f;
 
             var ship = _world.Ship;
@@ -99,28 +97,57 @@ namespace Pleiades
                     : "W/S проград/ретро · Q/E радиал · Shift форсаж", _body);
             y += line + 8f;
 
-            // --- Autoplanner ---
-            GUI.Label(new Rect(x, y, w - 20f, line), "Автопланер (Гоман от текущего r, колодец Земли)", _title);
+            // --- Orbit slots (Layer 0) ---
+            GUI.Label(new Rect(x, y, w - 20f, line), "Слоты орбит (клик = превью)", _title);
             y += line + 2f;
 
-            if (GUI.Button(new Rect(x, y, 100f, 24f), "Цель: Луна")) _planTarget = 0;
-            if (GUI.Button(new Rect(x + 105f, y, 90f, 24f), "Цель: ГСО")) _planTarget = 1;
-            if (GUI.Button(new Rect(x + 200f, y, 90f, 24f), "Цель: LEO")) _planTarget = 2;
-            y += 28f;
+            var slots = OrbitSlotCatalog.ForBody(OrbitBodyId.Earth);
+            const float rowH = 26f;
+            const float visibleRows = 8f;
+            var scrollViewH = visibleRows * rowH;
+            var contentH = slots.Count * rowH + 4f;
+            var scrollRect = new Rect(x, y, w - 24f, scrollViewH);
+            var viewRect = new Rect(0f, 0f, w - 48f, contentH);
+            _slotScroll = GUI.BeginScrollView(scrollRect, _slotScroll, viewRect);
+            for (var i = 0; i < slots.Count; i++)
+            {
+                var slot = slots[i];
+                var selected = _world.SelectedSlot != null && _world.SelectedSlot.Id == slot.Id;
+                var label = selected ? "► " + slot.DisplayNameRu : slot.DisplayNameRu;
+                if (GUI.Button(new Rect(0f, i * rowH, w - 52f, rowH - 2f), label))
+                    _world.SelectSlot(slot);
+            }
+            GUI.EndScrollView();
+            y += scrollViewH + 6f;
 
-            GUI.Label(new Rect(x, y, w - 20f, line), $"План → {PlanNames[_planTarget]}", _body);
-            y += line;
+            var plan = _world.PreviewSelectedSlot();
+            if (_world.SelectedSlot == null)
+            {
+                GUI.Label(new Rect(x, y, w - 20f, line), "Слот не выбран", _body);
+                y += line;
+            }
+            else if (!plan.Ok)
+            {
+                GUI.Label(new Rect(x, y, w - 20f, 40f), plan.FailRu, _warn);
+                y += 42f;
+            }
+            else
+            {
+                var t = plan.Transfer;
+                GUI.Label(new Rect(x, y, w - 20f, line),
+                    $"План → {_world.SelectedSlot.DisplayNameRu}", _body);
+                y += line;
+                GUI.Label(new Rect(x, y, w - 20f, line),
+                    $"Δv1 {t.DepartureDeltaV / 1000.0:0.00} · Δv2 {t.ArrivalDeltaV / 1000.0:0.00} · итого {t.TotalDeltaVKmS:0.00} км/с", _body);
+                y += line;
+                GUI.Label(new Rect(x, y, w - 20f, line),
+                    $"TOF {FormatTime(t.TimeOfFlightSeconds)}", _body);
+                y += line;
+            }
 
-            var plan = _world.PreviewTransfer(PlanIds[_planTarget]);
-            GUI.Label(new Rect(x, y, w - 20f, line),
-                $"Уход {plan.DepartureDeltaV / 1000.0:0.00} км/с · Прибытие {plan.ArrivalDeltaV / 1000.0:0.00} км/с · Итого {plan.TotalDeltaVKmS:0.00}", _body);
-            y += line;
-            GUI.Label(new Rect(x, y, w - 20f, line),
-                $"TOF {FormatTime(plan.TimeOfFlightSeconds)}   (исполнить уход жжёт только Δv1)", _body);
-            y += line + 4f;
-
+            y += 4f;
             if (GUI.Button(new Rect(x, y, 200f, 28f), "Исполнить уход"))
-                _world.TryDepart(PlanIds[_planTarget]);
+                _world.TryDepartSelectedSlot();
             y += 34f;
 
             if (GUI.Button(new Rect(x, y, 220f, 28f), "Цирк. вокруг Земли (C)"))
@@ -128,7 +155,7 @@ namespace Pleiades
             y += 34f;
 
             GUI.Label(new Rect(x, y, w - 20f, 36f),
-                "«Орбита Луны» = круговая вокруг Земли на r_moon (не вокруг Луны — SOI позже).",
+                "Клик = превью; исполнение жжёт только Δv1; L-точки = маркеры.",
                 _body);
             y += 40f;
 
@@ -162,8 +189,8 @@ namespace Pleiades
 
             if (_world.HasInterrupt)
             {
-                GUI.Box(new Rect(pad, pad + 570f, w, 70f), GUIContent.none);
-                GUI.Label(new Rect(x, pad + 578f, w - 20f, 54f), "⚠ " + _world.LastInterruptRu, _warn);
+                GUI.Box(new Rect(pad, pad + boxH + 8f, w, 70f), GUIContent.none);
+                GUI.Label(new Rect(x, pad + boxH + 16f, w - 20f, 54f), "⚠ " + _world.LastInterruptRu, _warn);
             }
         }
 
