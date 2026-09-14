@@ -1,0 +1,16 @@
+{
+    "name": "Pleiades",
+    "rootNamespace": "Pleiades",
+    "references": [
+        "Pleiades.CoreSim"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
