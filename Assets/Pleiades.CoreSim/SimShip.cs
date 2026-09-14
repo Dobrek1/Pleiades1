@@ -74,6 +74,14 @@ namespace Pleiades.CoreSim
             PayloadKg = kg;
         }
 
+        /// <summary>Debug refill only — clamp to capacity.</summary>
+        public void SetFuelKg(double kg)
+        {
+            if (kg < 0.0) kg = 0.0;
+            if (kg > FuelCapacityKg) kg = FuelCapacityKg;
+            FuelKg = kg;
+        }
+
         public bool TryBurn(double deltaVMps, out double fuelUsed)
         {
             fuelUsed = 0.0;

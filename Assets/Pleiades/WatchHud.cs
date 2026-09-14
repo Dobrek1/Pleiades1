@@ -7,15 +7,23 @@ namespace Pleiades
     {
         SimWorld _world;
         float _payloadSlider;
+        float _debugFuelSlider = -1f;
+        int _planTarget; // 0 lunar, 1 geo, 2 leo
         GUIStyle _title;
         GUIStyle _body;
         GUIStyle _warn;
+        GUIStyle _debug;
         bool _stylesReady;
+
+        static readonly string[] PlanNames = { "Луна (орбита Земли на r_moon)", "ГСО", "LEO" };
+        static readonly DestinationId[] PlanIds = { DestinationId.Lunar, DestinationId.Geo, DestinationId.Leo };
 
         public void Bind(SimWorld world)
         {
             _world = world;
             _payloadSlider = 0f;
+            _debugFuelSlider = -1f;
+            _planTarget = 0;
         }
 
         void EnsureStyles()
@@ -39,6 +47,11 @@ namespace Pleiades
                 wordWrap = true,
                 normal = { textColor = new Color(1f, 0.45f, 0.35f) }
             };
+            _debug = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 13,
+                normal = { textColor = new Color(1f, 0.7f, 0.3f) }
+            };
             _stylesReady = true;
         }
 
@@ -48,19 +61,19 @@ namespace Pleiades
             EnsureStyles();
 
             const float pad = 12f;
-            var w = 380f;
-            GUI.Box(new Rect(pad, pad, w, 460f), GUIContent.none);
+            var w = 420f;
+            GUI.Box(new Rect(pad, pad, w, 560f), GUIContent.none);
 
             float y = pad + 8f;
             var x = pad + 10f;
             const float line = 20f;
 
-            GUI.Label(new Rect(x, y, w - 20f, 24f), "ПЛЕЯДЫ — полёт", _title);
+            GUI.Label(new Rect(x, y, w - 20f, 24f), "ПЛЕЯДЫ — полёт + планер", _title);
             y += line + 6f;
 
             var ship = _world.Ship;
             var o = ship.Orbit;
-            GUI.Label(new Rect(x, y, w - 20f, line), $"Фаза: {_world.PhaseLabelRu}", _body); y += line;
+            GUI.Label(new Rect(x, y, w - 20f, line), $"Фаза: {_world.PhaseLabelRu}  ·  цель: {_world.DestinationLabelRu}", _body); y += line;
             GUI.Label(new Rect(x, y, w - 20f, line),
                 $"Время: {FormatTime(_world.SimTimeSeconds)}  |  {(_world.Paused ? "ПАУЗА" : "ХОД")}  варп ×{_world.WarpFactor:0}", _body);
             y += line;
@@ -80,19 +93,47 @@ namespace Pleiades
                 $"Δv {ship.AvailableDeltaV / 1000.0:0.00} км/с   LH2 {ship.FuelKg / 1000.0:0.0}/{ship.FuelCapacityKg / 1000.0:0} т   сухая {ship.DryMassKg / 1000.0:0.0} т", _body);
             y += line;
 
-            if (_world.IsThrusting)
-            {
-                GUI.Label(new Rect(x, y, w - 20f, line),
-                    $"тяга {_world.CurrentThrustMps2:0.0} м/с²  W/S проград  Q/E радиал  Shift форсаж", _body);
-            }
-            else
-            {
-                GUI.Label(new Rect(x, y, w - 20f, line),
-                    "W/S проград/ретро · Q/E радиал · Shift форсаж", _body);
-            }
-            y += line + 6f;
+            GUI.Label(new Rect(x, y, w - 20f, line),
+                _world.IsThrusting
+                    ? $"тяга {_world.CurrentThrustMps2:0.0} м/с²  W/S Q/E  Shift"
+                    : "W/S проград/ретро · Q/E радиал · Shift форсаж", _body);
+            y += line + 8f;
 
-            GUI.Label(new Rect(x, y, w - 20f, line), $"Груз (пока побоку): {_payloadSlider:0} кг", _body);
+            // --- Autoplanner ---
+            GUI.Label(new Rect(x, y, w - 20f, line), "Автопланер (Гоман от текущего r, колодец Земли)", _title);
+            y += line + 2f;
+
+            if (GUI.Button(new Rect(x, y, 100f, 24f), "Цель: Луна")) _planTarget = 0;
+            if (GUI.Button(new Rect(x + 105f, y, 90f, 24f), "Цель: ГСО")) _planTarget = 1;
+            if (GUI.Button(new Rect(x + 200f, y, 90f, 24f), "Цель: LEO")) _planTarget = 2;
+            y += 28f;
+
+            GUI.Label(new Rect(x, y, w - 20f, line), $"План → {PlanNames[_planTarget]}", _body);
+            y += line;
+
+            var plan = _world.PreviewTransfer(PlanIds[_planTarget]);
+            GUI.Label(new Rect(x, y, w - 20f, line),
+                $"Уход {plan.DepartureDeltaV / 1000.0:0.00} км/с · Прибытие {plan.ArrivalDeltaV / 1000.0:0.00} км/с · Итого {plan.TotalDeltaVKmS:0.00}", _body);
+            y += line;
+            GUI.Label(new Rect(x, y, w - 20f, line),
+                $"TOF {FormatTime(plan.TimeOfFlightSeconds)}   (исполнить уход жжёт только Δv1)", _body);
+            y += line + 4f;
+
+            if (GUI.Button(new Rect(x, y, 200f, 28f), "Исполнить уход"))
+                _world.TryDepart(PlanIds[_planTarget]);
+            y += 34f;
+
+            if (GUI.Button(new Rect(x, y, 220f, 28f), "Цирк. вокруг Земли (C)"))
+                _world.TryCircularizeHere();
+            y += 34f;
+
+            GUI.Label(new Rect(x, y, w - 20f, 36f),
+                "«Орбита Луны» = круговая вокруг Земли на r_moon (не вокруг Луны — SOI позже).",
+                _body);
+            y += 40f;
+
+            // payload
+            GUI.Label(new Rect(x, y, w - 20f, line), $"Груз: {_payloadSlider:0} кг", _body);
             y += line;
             var newPayload = GUI.HorizontalSlider(new Rect(x, y, w - 40f, 18f), _payloadSlider, 0f, 20000f);
             if (Mathf.Abs(newPayload - _payloadSlider) > 0.5f)
@@ -102,34 +143,27 @@ namespace Pleiades
             }
             y += line + 8f;
 
-            var geo = _world.PreviewTransfer(DestinationId.Geo);
-            var lun = _world.PreviewTransfer(DestinationId.Lunar);
-            GUI.Label(new Rect(x, y, w - 20f, line),
-                $"Гоман с текущей: ГСО {geo.TotalDeltaVKmS:0.02} км/с  Луна {lun.TotalDeltaVKmS:0.02}", _body);
-            y += line + 4f;
-
-            if (GUI.Button(new Rect(x, y, 150f, 28f), "Гоман → ГСО (G)"))
-                _world.TryDepart(DestinationId.Geo);
-            if (GUI.Button(new Rect(x + 160f, y, 150f, 28f), "Гоман → Луна (L)"))
-                _world.TryDepart(DestinationId.Lunar);
-            y += 34f;
-            if (GUI.Button(new Rect(x, y, 150f, 28f), "Циркуляризовать (C)"))
+            // debug fuel
+            if (_debugFuelSlider < 0f)
+                _debugFuelSlider = (float)ship.FuelKg;
+            GUI.Label(new Rect(x, y, w - 20f, line), $"debug LH2 (пополнение Δv): {_debugFuelSlider / 1000f:0.0} т", _debug);
+            y += line;
+            var newFuel = GUI.HorizontalSlider(new Rect(x, y, w - 40f, 18f), _debugFuelSlider, 0f, (float)ship.FuelCapacityKg);
+            if (Mathf.Abs(newFuel - _debugFuelSlider) > 1f)
             {
-                var vCirc = AstroMath.CircularSpeed(o.Mu, o.RadiusM);
-                var need = vCirc - o.SpeedMps;
-                if (ship.TryBurn(System.Math.Abs(need), out _))
-                    o.ApplyDeltaV(need, 0.0);
+                _debugFuelSlider = newFuel;
+                ship.SetFuelKg(_debugFuelSlider);
             }
-            y += 34f;
+            y += line + 6f;
 
-            GUI.Label(new Rect(x, y, w - 20f, 70f),
-                "Пробел пауза · 1–4 варп (старт ×3600, иначе «стоит»)\nF камера за кораблём · колёсико зум · ПКМ панорама\nТяга на варпе >60 режется до ×60",
+            GUI.Label(new Rect(x, y, w - 20f, 50f),
+                "Пробел пауза · 1–4 варп · F камера · L/G/H цели · C цирк. Земли\nРучная тяга остаётся. Тяга на варпе >60 → ×60.",
                 _body);
 
             if (_world.HasInterrupt)
             {
-                GUI.Box(new Rect(pad, pad + 470f, w, 70f), GUIContent.none);
-                GUI.Label(new Rect(x, pad + 478f, w - 20f, 54f), "⚠ " + _world.LastInterruptRu, _warn);
+                GUI.Box(new Rect(pad, pad + 570f, w, 70f), GUIContent.none);
+                GUI.Label(new Rect(x, pad + 578f, w - 20f, 54f), "⚠ " + _world.LastInterruptRu, _warn);
             }
         }
 
