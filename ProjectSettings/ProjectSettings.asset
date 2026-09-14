@@ -16,6 +16,7 @@ PlayerSettings:
   bundleVersion: 0.1.0
   preloadedAssets: []
   metroInputSource: 0
+  activeInputHandler: 0
   wsaTransparentSwapchain: 0
   defaultScreenWidth: 1920
   defaultScreenHeight: 1080
