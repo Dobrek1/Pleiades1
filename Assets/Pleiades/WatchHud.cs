@@ -16,7 +16,7 @@ namespace Pleiades
         bool _stylesReady;
 
         /// <summary>Shown in HUD so Play can confirm the exe matches git.</summary>
-        public const string BuildId = "a01b3e2";
+        public const string BuildId = "ab1d98f";
 
         public void Bind(SimWorld world)
         {
