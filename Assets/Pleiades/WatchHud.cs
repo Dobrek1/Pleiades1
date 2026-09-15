@@ -16,7 +16,7 @@ namespace Pleiades
         bool _stylesReady;
 
         /// <summary>Shown in HUD so Play can confirm the exe matches git.</summary>
-        public const string BuildId = "ab1d98f";
+        public const string BuildId = "warp-full";
 
         public void Bind(SimWorld world)
         {
@@ -161,7 +161,7 @@ namespace Pleiades
             if (_world.HasLivePlan)
             {
                 GUI.Label(new Rect(x, y, w - 20f, line),
-                    "План жив → варп ≤×60 (после отмены/прибытия снова 1/60/3600/86400)", _debug);
+                    "План жив → варп полный; шаг дробится до узла. Отменить = сброс плана", _debug);
                 y += line + 2f;
             }
 

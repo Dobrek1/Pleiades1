@@ -93,9 +93,6 @@ namespace Pleiades.CoreSim
         {
             if (index < 0) index = 0;
             if (index >= WarpFactors.Length) index = WarpFactors.Length - 1;
-            // Active plan with pending nodes: cap at ×60 so arrive window is not skipped.
-            if (ActivePlan != null && !ActivePlan.AllConsumed && index > 1)
-                index = 1;
             WarpIndex = index;
         }
 
@@ -507,24 +504,43 @@ namespace Pleiades.CoreSim
             return true;
         }
 
+        /// <summary>Seconds until next unconsumed plan node T; ∞ if none / past T waiting on geometry.</summary>
+        double TimeToNextPlanNode()
+        {
+            if (!HasLivePlan || ActivePlan.Nodes == null)
+                return double.PositiveInfinity;
+            for (var i = 0; i < ActivePlan.Nodes.Length; i++)
+            {
+                var n = ActivePlan.Nodes[i];
+                if (n.Consumed) continue;
+                var d = n.T - SimTimeSeconds;
+                return d > 1e-6 ? d : double.PositiveInfinity;
+            }
+            return double.PositiveInfinity;
+        }
+
         public void Tick(double realDeltaSeconds)
         {
             if (Paused || realDeltaSeconds <= 0.0) return;
 
             var thrusting = IsThrusting;
+            // Thrust still caps warp; live plan does NOT — full 1/60/3600/86400 for Play.
             if (thrusting && WarpIndex > 1)
                 WarpIndex = 1;
-            if (ActivePlan != null && !ActivePlan.AllConsumed && WarpIndex > 1)
-                WarpIndex = 1;
 
-            var warp = thrusting || (ActivePlan != null && !ActivePlan.AllConsumed)
-                ? System.Math.Min(WarpFactor, 60.0)
-                : WarpFactor;
+            var warp = thrusting ? System.Math.Min(WarpFactor, 60.0) : WarpFactor;
             var dt = realDeltaSeconds * warp;
             const double maxStep = 120.0;
             while (dt > 0.0)
             {
                 var step = dt > maxStep ? maxStep : dt;
+                // Land on node epoch so arrive window is not skipped at ×86400.
+                if (HasLivePlan)
+                {
+                    var toNode = TimeToNextPlanNode();
+                    if (toNode < step)
+                        step = toNode;
+                }
                 dt -= step;
                 Step(step, thrusting);
             }
