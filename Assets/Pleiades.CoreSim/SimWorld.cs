@@ -238,9 +238,13 @@ namespace Pleiades.CoreSim
                 return false;
             }
 
-            // Never stack leave burns: cancel live plan first (no impulse), then arm fresh.
+            // Live plan: do not auto Cancel+re-arm (would fire a second leave from the ellipse).
             if (HasLivePlan)
-                CancelPlan();
+            {
+                if (!HasInterrupt)
+                    RaiseInterrupt("Сначала «Отменить план», потом новый уход");
+                return false;
+            }
 
             if (!TryBuildPlanForSelectedSlot(out var plan, out var failRu))
             {
