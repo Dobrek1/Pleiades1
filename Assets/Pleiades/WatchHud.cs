@@ -59,14 +59,14 @@ namespace Pleiades
 
             const float pad = 12f;
             var w = 420f;
-            const float boxH = 700f;
+            const float boxH = 760f;
             GUI.Box(new Rect(pad, pad, w, boxH), GUIContent.none);
 
             float y = pad + 8f;
             var x = pad + 10f;
             const float line = 20f;
 
-            GUI.Label(new Rect(x, y, w - 20f, 24f), "ПЛЕЯДЫ — Слоты орбит (Layer 0)", _title);
+            GUI.Label(new Rect(x, y, w - 20f, 24f), "ПЛЕЯДЫ — Слоты (Layer B, узлы)", _title);
             y += line + 6f;
 
             var ship = _world.Ship;
@@ -97,7 +97,7 @@ namespace Pleiades
                     : "W/S проград/ретро · Q/E радиал · Shift форсаж", _body);
             y += line + 8f;
 
-            // --- Orbit slots (Layer 0) ---
+            // --- Orbit slots ---
             GUI.Label(new Rect(x, y, w - 20f, line), "Слоты орбит (клик = превью)", _title);
             y += line + 2f;
 
@@ -135,7 +135,7 @@ namespace Pleiades
             {
                 var t = plan.Transfer;
                 GUI.Label(new Rect(x, y, w - 20f, line),
-                    $"План → {_world.SelectedSlot.DisplayNameRu}", _body);
+                    $"Превью → {_world.SelectedSlot.DisplayNameRu}", _body);
                 y += line;
                 GUI.Label(new Rect(x, y, w - 20f, line),
                     $"Δv1 {t.DepartureDeltaV / 1000.0:0.00} · Δv2 {t.ArrivalDeltaV / 1000.0:0.00} · итого {t.TotalDeltaVKmS:0.00} км/с", _body);
@@ -150,14 +150,38 @@ namespace Pleiades
                 _world.TryDepartSelectedSlot();
             y += 34f;
 
+            // Armed Layer B plan nodes
+            var armed = _world.ActivePlan;
+            if (armed != null && armed.Nodes != null)
+            {
+                GUI.Label(new Rect(x, y, w - 20f, line),
+                    $"Активный план B → {armed.Slot.DisplayNameRu} (импульсы, не непрерывный огонь)", _body);
+                y += line;
+                for (var i = 0; i < armed.Nodes.Length; i++)
+                {
+                    var n = armed.Nodes[i];
+                    var tag = n.Consumed ? "✓" : "○";
+                    var kind = i == 0 ? "уход" : "прибытие";
+                    var dv = System.Math.Sqrt(n.DvPrograde * n.DvPrograde + n.DvRadial * n.DvRadial);
+                    GUI.Label(new Rect(x, y, w - 20f, line),
+                        $"{tag} {kind}: t={FormatTime(n.T)}  Δv {dv / 1000.0:0.00} км/с  ν={n.TrueAnomalyRad:0.00}",
+                        _body);
+                    y += line;
+                }
+                GUI.Label(new Rect(x, y, w - 20f, line),
+                    $"прибытие sim {FormatTime(armed.ArrivalSimTime)}  ·  фаза Луны@arr {armed.TargetMoonAnomalyAtArrival:0.00}",
+                    _body);
+                y += line + 4f;
+            }
+
             if (GUI.Button(new Rect(x, y, 220f, 28f), "Цирк. вокруг Земли (C)"))
                 _world.TryCircularizeHere();
             y += 34f;
 
-            GUI.Label(new Rect(x, y, w - 20f, 36f),
-                "Клик = превью; исполнение жжёт только Δv1; L-точки = маркеры.",
+            GUI.Label(new Rect(x, y, w - 20f, 48f),
+                "Клик = превью; «Исполнить уход» ставит 2 узла (уход+прибытие).\nL-точки = маркеры. Импульсы по t и аномалии (B).",
                 _body);
-            y += 40f;
+            y += 52f;
 
             // payload
             GUI.Label(new Rect(x, y, w - 20f, line), $"Груз: {_payloadSlider:0} кг", _body);

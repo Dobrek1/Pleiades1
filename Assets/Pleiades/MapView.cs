@@ -9,6 +9,7 @@ namespace Pleiades
         Transform _earth;
         Transform _moon;
         Transform _ship;
+        Transform _moonPlanMarker;
         LineRenderer _leoRing;
         LineRenderer _geoRing;
         LineRenderer _moonOrbitRing;
@@ -24,6 +25,7 @@ namespace Pleiades
         static readonly Color ShipOrbitColor = new Color(1f, 0.75f, 0.2f, 0.9f);
         static readonly Color TransferColor = new Color(1f, 0.45f, 0.15f, 0.7f);
         static readonly Color ThrustColor = new Color(1f, 0.35f, 0.1f);
+        static readonly Color MoonPlanMarkerColor = new Color(1f, 0.55f, 0.85f, 0.95f);
 
         public void Bind(SimWorld world) => _world = world;
 
@@ -34,6 +36,8 @@ namespace Pleiades
             _earth = CreateSphere("Earth", EarthColor, (float)AstroMath.MetersToUnits(GravityBody.Earth.RadiusM));
             _moon = CreateSphere("Moon", MoonColor, Mathf.Max(1.4f, (float)AstroMath.MetersToUnits(GravityBody.Moon.RadiusM)));
             _ship = CreateSphere("Ship", ShipColor, 1.1f);
+            _moonPlanMarker = CreateSphere("MoonPlanTarget", MoonPlanMarkerColor, 1.6f);
+            _moonPlanMarker.gameObject.SetActive(false);
 
             var rLeo = GravityBody.Earth.RadiusM + 200_000.0;
             _leoRing = CreateRing("LeoOrbit", OrbitColor, (float)AstroMath.MetersToUnits(rLeo), 128);
@@ -109,6 +113,19 @@ namespace Pleiades
             if (rend != null)
                 rend.material.color = _world.IsThrusting ? ThrustColor : ShipColor;
 
+            if (_moonPlanMarker != null)
+            {
+                _world.GetPlanMoonTargetMeters(out var px, out var py, out var pz, out var ok);
+                _moonPlanMarker.gameObject.SetActive(ok && _world.ActivePlan != null);
+                if (ok)
+                {
+                    _moonPlanMarker.position = new Vector3(
+                        (float)AstroMath.MetersToUnits(px),
+                        (float)AstroMath.MetersToUnits(py),
+                        (float)AstroMath.MetersToUnits(pz));
+                }
+            }
+
             DrawShipOrbit();
             UpdateTransferArc();
         }
@@ -158,11 +175,14 @@ namespace Pleiades
         void UpdateTransferArc()
         {
             if (_transferArc == null) return;
-            var show = _world.Destination != DestinationId.None;
+            var t = _world.ActiveTransfer;
+            var show = t.TimeOfFlightSeconds > 0.0 && t.R1 > 0.0 && t.R2 > 0.0
+                && (_world.ActivePlan != null
+                    || _world.Destination != DestinationId.None
+                    || _world.DestinationLabelRu != "свободный полёт");
             _transferArc.enabled = show;
             if (!show) return;
 
-            var t = _world.ActiveTransfer;
             var n = _transferArc.positionCount;
             for (var i = 0; i < n; i++)
             {

@@ -26,6 +26,7 @@ namespace Pleiades.CoreSim
     /// <summary>
     /// Flight first: ship always coasts on a real ellipse. Hold thrust to fly.
     /// Hohmann buttons are optional planners, not the only way to move.
+    /// Layer B: CircularAltitude Earth slots arm a 2-node impulse queue (leave+arrive).
     /// </summary>
     public sealed class SimWorld
     {
@@ -33,6 +34,14 @@ namespace Pleiades.CoreSim
 
         public const double ThrustMps2 = 4.0;
         public const double BoostMps2 = 12.0;
+
+        /// <summary>Anomaly match threshold for node fire (rad).</summary>
+        public const double NodeAnomalyTolRad = 0.05;
+
+        /// <summary>If SimTime is past node.T by this many seconds, fire anyway (warp safety).</summary>
+        public const double NodeOverdueSeconds = 60.0;
+
+        public const double MoonSiderealPeriodSeconds = 27.321661 * 86400.0;
 
         public SimShip Ship { get; }
         public double SimTimeSeconds { get; private set; }
@@ -45,8 +54,11 @@ namespace Pleiades.CoreSim
         public Hohmann.Transfer ActiveTransfer { get; private set; }
         public double TransferElapsed { get; private set; }
 
-        /// <summary>UI-selected orbit slot (preview only until TryDepartSelectedSlot).</summary>
+        /// <summary>UI-selected orbit slot (preview only until TryDepartSelectedSlot / TryArm).</summary>
         public OrbitSlot SelectedSlot { get; private set; }
+
+        /// <summary>Armed Layer B maneuver plan (nullable). Impulses fire in Tick.</summary>
+        public ManeuverPlan ActivePlan { get; private set; }
 
         /// <summary>Display name from last slot depart; preferred by DestinationLabelRu.</summary>
         string _activeDestinationRu = "";
@@ -139,9 +151,105 @@ namespace Pleiades.CoreSim
         }
 
         /// <summary>
+        /// Build Layer B two-node Hohmann plan for SelectedSlot without arming.
+        /// Fails honestly for MarkerOnly / non-Earth / null.
+        /// </summary>
+        public bool TryBuildPlanForSelectedSlot(out ManeuverPlan plan, out string failRu)
+        {
+            plan = null;
+            failRu = "";
+            var preview = PreviewSelectedSlot();
+            if (!preview.Ok)
+            {
+                failRu = string.IsNullOrEmpty(preview.FailRu) ? "Нет плана" : preview.FailRu;
+                return false;
+            }
+
+            var transfer = preview.Transfer;
+            var slot = preview.Slot;
+            var now = SimTimeSeconds;
+            var tof = transfer.TimeOfFlightSeconds;
+            var tArr = now + tof;
+            var nu0 = Ship.Orbit.TrueAnomalyRad;
+            var raising = transfer.R2 >= transfer.R1;
+            var sign = raising ? 1.0 : -1.0;
+
+            var moonN = 2.0 * System.Math.PI / MoonSiderealPeriodSeconds;
+            var moonAtArr = KeplerOrbit.WrapAngle(MoonAnomalyRad + tof * moonN);
+
+            plan = new ManeuverPlan
+            {
+                Slot = slot,
+                Transfer = transfer,
+                ArrivalSimTime = tArr,
+                TargetMoonAnomalyAtArrival = moonAtArr,
+                Nodes = new[]
+                {
+                    new BurnNode
+                    {
+                        T = now,
+                        TrueAnomalyRad = KeplerOrbit.WrapAngle(nu0),
+                        DvPrograde = sign * transfer.DepartureDeltaV,
+                        DvRadial = 0.0,
+                        Consumed = false,
+                    },
+                    new BurnNode
+                    {
+                        T = tArr,
+                        TrueAnomalyRad = KeplerOrbit.WrapAngle(nu0 + System.Math.PI),
+                        DvPrograde = sign * transfer.ArrivalDeltaV,
+                        DvRadial = 0.0,
+                        Consumed = false,
+                    },
+                },
+            };
+            return true;
+        }
+
+        /// <summary>
+        /// Arm Layer B plan for SelectedSlot. Does not burn yet (except immediate
+        /// leave node if already at anomaly / time). Clears prior Destination path.
+        /// </summary>
+        public bool TryArmSelectedSlotPlan()
+        {
+            if (IsThrusting)
+            {
+                if (!HasInterrupt)
+                    RaiseInterrupt("Сбросьте тягу перед авто-уходом");
+                return false;
+            }
+
+            if (!TryBuildPlanForSelectedSlot(out var plan, out var failRu))
+            {
+                if (!HasInterrupt)
+                    RaiseInterrupt(failRu);
+                return false;
+            }
+
+            var need = plan.Transfer.TotalDeltaV;
+            if (Ship.AvailableDeltaV < need - 1e-3)
+            {
+                if (!HasInterrupt)
+                    RaiseInterrupt("Не хватает Δv на уход+прибытие (план B, два импульса)");
+                return false;
+            }
+
+            ActivePlan = plan;
+            Destination = ClosestDestinationId(plan.Slot);
+            _activeDestinationRu = plan.Slot.DisplayNameRu;
+            ActiveTransfer = plan.Transfer;
+            TransferElapsed = 0.0;
+            Phase = FlightPhase.Coast;
+
+            // Leave node: fire immediately when anomaly already matches (t = now).
+            TryFireReadyPlanNodes();
+            return true;
+        }
+
+        /// <summary>
         /// Geo (circ→circ): need total Δv. Lunar/Leo profile B: only departure burn;
         /// circularize at destination is optional (C) and separate.
-        /// Layer 0 slot depart: always profile B (Δv1 only), including GSO.
+        /// Keyboard L/G/H still use instant Δv1 (L0). Slot button uses Layer B nodes.
         /// </summary>
         public double RequiredDeltaVForDepart(DestinationId dest)
         {
@@ -190,6 +298,9 @@ namespace Pleiades.CoreSim
                 return false;
             }
 
+            // Keyboard path: clear any armed slot plan; instant Δv1 leave.
+            ClearActivePlanOnly();
+
             var transfer = PreviewTransfer(dest);
             if (!Ship.TryBurn(transfer.DepartureDeltaV, out _))
             {
@@ -211,53 +322,81 @@ namespace Pleiades.CoreSim
         }
 
         /// <summary>
-        /// Layer 0: apply only Δv1 (departure) toward SelectedSlot circular target.
-        /// Markers / null / insufficient fuel fail honestly.
+        /// Layer B: arm two-node Hohmann plan for SelectedSlot (leave + arrive impulses).
+        /// Markers / null / insufficient fuel fail honestly. No continuous burn.
         /// </summary>
-        public bool TryDepartSelectedSlot()
+        public bool TryDepartSelectedSlot() => TryArmSelectedSlotPlan();
+
+        void ClearActivePlanOnly()
         {
-            var plan = PreviewSelectedSlot();
-            if (!plan.Ok)
-            {
-                if (!HasInterrupt)
-                    RaiseInterrupt(string.IsNullOrEmpty(plan.FailRu) ? "Нет плана" : plan.FailRu);
-                return false;
-            }
+            ActivePlan = null;
+        }
 
-            if (IsThrusting)
-            {
-                if (!HasInterrupt)
-                    RaiseInterrupt("Сбросьте тягу перед авто-уходом");
-                return false;
-            }
-
-            var transfer = plan.Transfer;
-            var need = transfer.DepartureDeltaV;
-            if (Ship.AvailableDeltaV < need - 1e-3)
-            {
-                if (!HasInterrupt)
-                    RaiseInterrupt("Не хватает Δv на уход (профиль B: циркуляризация отдельно)");
-                return false;
-            }
-
-            if (!Ship.TryBurn(transfer.DepartureDeltaV, out _))
-            {
-                RaiseInterrupt("Топливо: не хватает на уход");
-                return false;
-            }
-
-            var dv = transfer.R2 >= transfer.R1
-                ? transfer.DepartureDeltaV
-                : -transfer.DepartureDeltaV;
-            Ship.Orbit.ApplyDeltaV(dv, 0.0);
-
-            var slot = plan.Slot;
-            Destination = ClosestDestinationId(slot);
-            _activeDestinationRu = slot.DisplayNameRu;
-            ActiveTransfer = transfer;
+        void ClearActivePlanAndDestination()
+        {
+            ActivePlan = null;
+            Destination = DestinationId.None;
+            _activeDestinationRu = "";
+            ActiveTransfer = default;
             TransferElapsed = 0.0;
-            Phase = FlightPhase.Coast;
-            return true;
+        }
+
+        static double AngleDiffAbs(double a, double b)
+        {
+            var d = KeplerOrbit.WrapAngle(a - b);
+            if (d > System.Math.PI)
+                d = 2.0 * System.Math.PI - d;
+            return d;
+        }
+
+        bool NodeReady(in BurnNode node)
+        {
+            if (node.Consumed) return false;
+            if (SimTimeSeconds < node.T) return false;
+
+            var overdue = SimTimeSeconds >= node.T + NodeOverdueSeconds;
+            if (overdue) return true;
+
+            var nu = Ship.Orbit.TrueAnomalyRad;
+            return AngleDiffAbs(nu, node.TrueAnomalyRad) < NodeAnomalyTolRad;
+        }
+
+        /// <summary>Fire the next unconsumed ready node (sequential). Impulse only.</summary>
+        void TryFireReadyPlanNodes()
+        {
+            var plan = ActivePlan;
+            if (plan == null || plan.Nodes == null) return;
+
+            for (var i = 0; i < plan.Nodes.Length; i++)
+            {
+                var node = plan.Nodes[i];
+                if (node.Consumed) continue;
+                if (!NodeReady(node)) return;
+
+                var dvP = node.DvPrograde;
+                var dvR = node.DvRadial;
+                var mag = System.Math.Sqrt(dvP * dvP + dvR * dvR);
+                if (!Ship.TryBurn(mag, out _))
+                {
+                    RaiseInterrupt("Топливо: не хватает на импульс плана B");
+                    ClearActivePlanAndDestination();
+                    return;
+                }
+
+                Ship.Orbit.ApplyDeltaV(dvP, dvR);
+                node.Consumed = true;
+                plan.Nodes[i] = node;
+                Phase = FlightPhase.Coast;
+
+                if (plan.AllConsumed)
+                {
+                    ClearActivePlanAndDestination();
+                    Phase = FlightPhase.Arrived;
+                    RaiseInterrupt("У цели (план B). C — циркуляризовать если нужно.");
+                    WarpIndex = 0;
+                }
+                return; // one impulse per call; next node waits for its T/anomaly
+            }
         }
 
         static DestinationId ClosestDestinationId(OrbitSlot slot)
@@ -352,9 +491,12 @@ namespace Pleiades.CoreSim
         {
             SimTimeSeconds += dt;
 
-            const double moonPeriod = 27.321661 * 86400.0;
             MoonAnomalyRad = KeplerOrbit.WrapAngle(
-                MoonAnomalyRad + dt * (2.0 * System.Math.PI / moonPeriod));
+                MoonAnomalyRad + dt * (2.0 * System.Math.PI / MoonSiderealPeriodSeconds));
+
+            // Layer B: timed impulse nodes (before thrust/coast so leave can fire cleanly).
+            if (ActivePlan != null && !thrusting)
+                TryFireReadyPlanNodes();
 
             if (thrusting)
             {
@@ -388,23 +530,28 @@ namespace Pleiades.CoreSim
                 RaiseInterrupt("Перицентр в атмосфере. Орбита поднята, чтобы не зарыться.");
             }
 
-            // Active plan: keyboard DestinationId and/or slot ActiveDestinationRu
-            // (parking/MEO may have Destination=None but still need arrival).
-            var hasPlan = ActiveTransfer.TimeOfFlightSeconds > 0.0
-                && (Destination != DestinationId.None || !string.IsNullOrEmpty(_activeDestinationRu));
-            if (hasPlan)
+            // Keyboard L0 path only (no ActivePlan): arrive by radius proximity.
+            if (ActivePlan == null)
+            {
+                var hasPlan = ActiveTransfer.TimeOfFlightSeconds > 0.0
+                    && (Destination != DestinationId.None || !string.IsNullOrEmpty(_activeDestinationRu));
+                if (hasPlan)
+                {
+                    TransferElapsed += dt;
+                    var target = ActiveTransfer.R2;
+                    if (System.Math.Abs(r - target) / target < 0.02)
+                    {
+                        Destination = DestinationId.None;
+                        _activeDestinationRu = "";
+                        Phase = FlightPhase.Arrived;
+                        RaiseInterrupt("У цели (эллипс). C — циркуляризовать здесь, если хватит Δv.");
+                        WarpIndex = 0;
+                    }
+                }
+            }
+            else
             {
                 TransferElapsed += dt;
-                var target = ActiveTransfer.R2;
-                // Profile B: arrive on transfer ellipse when |r-R2|/R2 < 2% (no auto-circularize).
-                if (System.Math.Abs(r - target) / target < 0.02)
-                {
-                    Destination = DestinationId.None;
-                    _activeDestinationRu = "";
-                    Phase = FlightPhase.Arrived;
-                    RaiseInterrupt("У цели (эллипс). C — циркуляризовать здесь, если хватит Δv.");
-                    WarpIndex = 0;
-                }
             }
         }
 
@@ -416,11 +563,29 @@ namespace Pleiades.CoreSim
             z = r * System.Math.Sin(MoonAnomalyRad);
         }
 
+        /// <summary>Moon phase marker for ActivePlan arrival (same-body circ at r_moon).</summary>
+        public void GetPlanMoonTargetMeters(out double x, out double y, out double z, out bool ok)
+        {
+            ok = false;
+            x = y = z = 0.0;
+            if (ActivePlan == null || ActivePlan.Slot == null) return;
+            var scale = System.Math.Max(GravityBody.MoonOrbitRadiusM, 1.0);
+            if (System.Math.Abs(ActivePlan.Slot.RadiusM - GravityBody.MoonOrbitRadiusM) / scale > 1e-3)
+                return;
+            var r = GravityBody.MoonOrbitRadiusM;
+            var a = ActivePlan.TargetMoonAnomalyAtArrival;
+            x = r * System.Math.Cos(a);
+            y = 0.0;
+            z = r * System.Math.Sin(a);
+            ok = true;
+        }
+
         public string PhaseLabelRu
         {
             get
             {
                 if (IsThrusting) return Boost ? "Жжём (форсаж)" : "Жжём";
+                if (ActivePlan != null) return "План B (узлы)";
                 if (Ship.Orbit.Eccentricity >= 1.0) return "Гипербола / уход";
                 return "Дрейф";
             }
