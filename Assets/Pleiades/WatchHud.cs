@@ -15,6 +15,9 @@ namespace Pleiades
         GUIStyle _debug;
         bool _stylesReady;
 
+        /// <summary>Shown in HUD so Play can confirm the exe matches git.</summary>
+        public const string BuildId = "fb1266d";
+
         public void Bind(SimWorld world)
         {
             _world = world;
@@ -66,7 +69,7 @@ namespace Pleiades
             var x = pad + 10f;
             const float line = 20f;
 
-            GUI.Label(new Rect(x, y, w - 20f, 24f), "ПЛЕЯДЫ — Слоты (Layer B, узлы)", _title);
+            GUI.Label(new Rect(x, y, w - 20f, 24f), "ПЛЕЯДЫ · " + BuildId + " · слоты/узлы", _title);
             y += line + 6f;
 
             var ship = _world.Ship;
