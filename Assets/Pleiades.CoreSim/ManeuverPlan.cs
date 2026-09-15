@@ -24,6 +24,8 @@ namespace Pleiades.CoreSim
         public double TargetMoonAnomalyAtArrival;
         public Hohmann.Transfer Transfer;
         public OrbitSlot Slot;
+        /// <summary>Inertial angle of ship at leave (Atan2 Rz,Rx) for map arc.</summary>
+        public double LeavePhaseRad;
 
         public bool AllConsumed
         {

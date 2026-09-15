@@ -23,7 +23,8 @@ namespace Pleiades
         static readonly Color GeoColor = new Color(0.3f, 1f, 0.6f, 0.35f);
         static readonly Color MoonOrbitColor = new Color(0.7f, 0.7f, 0.7f, 0.28f);
         static readonly Color ShipOrbitColor = new Color(1f, 0.75f, 0.2f, 0.9f);
-        static readonly Color TransferColor = new Color(1f, 0.45f, 0.15f, 0.7f);
+        static readonly Color TransferColor = new Color(1f, 0.2f, 0.15f, 0.85f); // red preview/armed transfer
+        static readonly Color ActiveTransferColor = new Color(1f, 0.45f, 0.15f, 0.75f);
         static readonly Color ThrustColor = new Color(1f, 0.35f, 0.1f);
         static readonly Color MoonPlanMarkerColor = new Color(1f, 0.55f, 0.85f, 0.95f);
 
@@ -185,23 +186,48 @@ namespace Pleiades
         void UpdateTransferArc()
         {
             if (_transferArc == null) return;
-            var t = _world.ActiveTransfer;
-            var show = t.TimeOfFlightSeconds > 0.0 && t.R1 > 0.0 && t.R2 > 0.0
-                && (_world.ActivePlan != null
-                    || _world.Destination != DestinationId.None
-                    || _world.DestinationLabelRu != "свободный полёт");
+
+            Hohmann.Transfer t = default;
+            var phase = 0.0;
+            var show = false;
+            var armed = _world.ActivePlan != null && !_world.ActivePlan.AllConsumed
+                && _world.ActiveTransfer.TimeOfFlightSeconds > 0.0;
+
+            if (armed)
+            {
+                t = _world.ActiveTransfer;
+                phase = _world.ActivePlan.LeavePhaseRad;
+                show = t.R1 > 0.0 && t.R2 > 0.0;
+                _transferArc.startColor = ActiveTransferColor;
+                _transferArc.endColor = ActiveTransferColor;
+            }
+            else
+            {
+                var preview = _world.PreviewSelectedSlot();
+                if (preview.Ok && preview.Transfer.TimeOfFlightSeconds > 0.0)
+                {
+                    t = preview.Transfer;
+                    phase = preview.LeavePhaseRad;
+                    show = t.R1 > 0.0 && t.R2 > 0.0;
+                    _transferArc.startColor = TransferColor;
+                    _transferArc.endColor = TransferColor;
+                }
+            }
+
             _transferArc.enabled = show;
             if (!show) return;
 
+            var raising = t.R2 >= t.R1;
             var n = _transferArc.positionCount;
             for (var i = 0; i < n; i++)
             {
                 var u = i / (double)(n - 1);
                 var r = SampleTransferR(t, u);
                 var nu = System.Math.PI * u;
-                if (t.R2 < t.R1) nu = System.Math.PI * (1.0 - u);
-                var x = (float)AstroMath.MetersToUnits(r * System.Math.Cos(nu));
-                var z = (float)AstroMath.MetersToUnits(r * System.Math.Sin(nu));
+                if (!raising) nu = System.Math.PI * (1.0 - u);
+                var ang = phase + (raising ? nu : -nu);
+                var x = (float)AstroMath.MetersToUnits(r * System.Math.Cos(ang));
+                var z = (float)AstroMath.MetersToUnits(r * System.Math.Sin(ang));
                 _transferArc.SetPosition(i, new Vector3(x, 0.1f, z));
             }
         }

@@ -21,6 +21,11 @@ namespace Pleiades.CoreSim
         public string FailRu;
         public OrbitSlot Slot;
         public Hohmann.Transfer Transfer;
+        /// <summary>Leave impulse in ship prograde/radial frame from current v → transfer VisViva.</summary>
+        public double LeaveDvPrograde;
+        public double LeaveDvRadial;
+        /// <summary>Ship Atan2(Rz,Rx) at snapshot (map preview orientation).</summary>
+        public double LeavePhaseRad;
     }
 
     /// <summary>
@@ -110,10 +115,10 @@ namespace Pleiades.CoreSim
             WarpIndex = 0;
         }
 
-        /// <summary>Preview only — never burns. Changing slot while a plan is live cancels it.</summary>
+        /// <summary>Preview only — never burns. Changing slot while a plan is live cancels it (no impulse).</summary>
         public void SelectSlot(OrbitSlot slot)
         {
-            if (ActivePlan != null && !ActivePlan.AllConsumed)
+            if (HasLivePlan)
             {
                 if (slot == null || SelectedSlot == null || slot.Id != SelectedSlot.Id)
                     CancelPlan();
@@ -157,13 +162,90 @@ namespace Pleiades.CoreSim
                 return result;
             }
 
-            result.Transfer = Hohmann.Compute(
-                GravityBody.Earth.Mu,
-                Ship.Orbit.RadiusM,
-                slot.RadiusM);
+            if (!TryComputeTransferFromCurrentState(slot.RadiusM, out var transfer, out var dvP, out var dvR, out var phase, out var fail))
+            {
+                result.Ok = false;
+                result.FailRu = fail;
+                return result;
+            }
+
+            result.Transfer = transfer;
+            result.LeaveDvPrograde = dvP;
+            result.LeaveDvRadial = dvR;
+            result.LeavePhaseRad = phase;
             result.Ok = true;
             result.FailRu = "";
             return result;
+        }
+
+        /// <summary>
+        /// One snapshot: current r,v → Hohmann geometry to circular R2.
+        /// Leave Δv is vectorial (VisViva on transfer at r_now minus current v),
+        /// not circular-orbit Δv applied onto an ellipse.
+        /// </summary>
+        bool TryComputeTransferFromCurrentState(
+            double r2,
+            out Hohmann.Transfer transfer,
+            out double leaveDvP,
+            out double leaveDvR,
+            out double leavePhaseRad,
+            out string failRu)
+        {
+            transfer = default;
+            leaveDvP = 0.0;
+            leaveDvR = 0.0;
+            leavePhaseRad = 0.0;
+            failRu = "";
+
+            var o = Ship.Orbit;
+            var r1 = o.RadiusM;
+            if (r1 < GravityBody.Earth.RadiusM + 80_000.0)
+            {
+                failRu = "Слишком низко для ухода";
+                return false;
+            }
+            if (r2 <= 0.0)
+            {
+                failRu = "Некорректный радиус слота";
+                return false;
+            }
+            if (System.Math.Abs(r2 - r1) / System.Math.Max(r1, r2) < 1e-4)
+            {
+                failRu = "Уже на этом радиусе";
+                return false;
+            }
+
+            var mu = o.Mu;
+            transfer = Hohmann.Compute(mu, r1, r2);
+            leavePhaseRad = System.Math.Atan2(o.Rz, o.Rx);
+
+            // Desired velocity on transfer ellipse at current r (peri if raising, apo if lowering).
+            var a = transfer.SemiMajor;
+            var vDesMag = AstroMath.VisViva(mu, r1, a);
+            var h = o.Rx * o.Vz - o.Rz * o.Vx;
+            double tx, tz;
+            if (h >= 0.0)
+            {
+                tx = -o.Rz / r1;
+                tz = o.Rx / r1;
+            }
+            else
+            {
+                tx = o.Rz / r1;
+                tz = -o.Rx / r1;
+            }
+            var vxDes = tx * vDesMag;
+            var vzDes = tz * vDesMag;
+            var dvx = vxDes - o.Vx;
+            var dvz = vzDes - o.Vz;
+
+            o.GetProgradeUnit(out var px, out _, out var pz);
+            o.GetRadialUnit(out var rx, out _, out var rz);
+            leaveDvP = dvx * px + dvz * pz;
+            leaveDvR = dvx * rx + dvz * rz;
+            transfer.DepartureDeltaV = System.Math.Sqrt(dvx * dvx + dvz * dvz);
+            transfer.TotalDeltaV = transfer.DepartureDeltaV + transfer.ArrivalDeltaV;
+            return true;
         }
 
         /// <summary>
@@ -174,6 +256,7 @@ namespace Pleiades.CoreSim
         {
             plan = null;
             failRu = "";
+            // Same snapshot as HUD preview (after any SelectSlot Cancel).
             var preview = PreviewSelectedSlot();
             if (!preview.Ok)
             {
@@ -197,6 +280,7 @@ namespace Pleiades.CoreSim
             {
                 Slot = slot,
                 Transfer = transfer,
+                LeavePhaseRad = preview.LeavePhaseRad,
                 ArrivalSimTime = tArr,
                 TargetMoonAnomalyAtArrival = moonAtArr,
                 Nodes = new[]
@@ -205,8 +289,8 @@ namespace Pleiades.CoreSim
                     {
                         T = now,
                         TrueAnomalyRad = KeplerOrbit.WrapAngle(nu0),
-                        DvPrograde = sign * transfer.DepartureDeltaV,
-                        DvRadial = 0.0,
+                        DvPrograde = preview.LeaveDvPrograde,
+                        DvRadial = preview.LeaveDvRadial,
                         Consumed = false,
                     },
                     new BurnNode
