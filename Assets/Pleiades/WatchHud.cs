@@ -88,7 +88,7 @@ namespace Pleiades
             y += line;
 
             GUI.Label(new Rect(x, y, w - 20f, line),
-                $"Δv {ship.AvailableDeltaV / 1000.0:0.00} км/с   LH2 {ship.FuelKg / 1000.0:0.0}/{ship.FuelCapacityKg / 1000.0:0} т   сухая {ship.DryMassKg / 1000.0:0.0} т", _body);
+                $"Δv {ship.AvailableDeltaV / 1000.0:0.0} км/с (рак +debug {ship.DebugExtraDeltaVLeft / 1000.0:0.0})  LH2 {ship.FuelKg / 1000.0:0.0}/{ship.FuelCapacityKg / 1000.0:0} т", _body);
             y += line;
 
             GUI.Label(new Rect(x, y, w - 20f, line),

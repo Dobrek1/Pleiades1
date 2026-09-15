@@ -64,8 +64,16 @@ namespace Pleiades.CoreSim
 
         public double WetMassKg => DryMassKg + FuelKg;
 
-        public double AvailableDeltaV =>
+        /// <summary>Temporary debug pool (1000 km/s) on top of rocket Δv — not production propellant.</summary>
+        public const double DebugExtraDeltaVMps = 1_000_000.0;
+        double _debugExtraDeltaVLeft = DebugExtraDeltaVMps;
+
+        public double RocketDeltaV =>
             AstroMath.RocketDeltaV(IspSeconds, WetMassKg, DryMassKg);
+
+        public double DebugExtraDeltaVLeft => _debugExtraDeltaVLeft;
+
+        public double AvailableDeltaV => RocketDeltaV + _debugExtraDeltaVLeft;
 
         public void SetPayloadKg(double kg)
         {
@@ -82,16 +90,34 @@ namespace Pleiades.CoreSim
             FuelKg = kg;
         }
 
+        /// <summary>Refill temporary debug Δv pool (default 1000 km/s).</summary>
+        public void SetDebugExtraDeltaV(double mps)
+        {
+            if (mps < 0.0) mps = 0.0;
+            _debugExtraDeltaVLeft = mps;
+        }
+
         public bool TryBurn(double deltaVMps, out double fuelUsed)
         {
             fuelUsed = 0.0;
             if (deltaVMps <= 0.0) return true;
             if (AvailableDeltaV + 1e-6 < deltaVMps) return false;
 
-            fuelUsed = AstroMath.FuelForDeltaV(IspSeconds, WetMassKg, deltaVMps);
-            if (fuelUsed > FuelKg + 1e-6) return false;
-            FuelKg -= fuelUsed;
-            if (FuelKg < 0.0) FuelKg = 0.0;
+            var rocket = RocketDeltaV;
+            var fromRocket = deltaVMps <= rocket ? deltaVMps : rocket;
+            var fromDebug = deltaVMps - fromRocket;
+
+            if (fromRocket > 0.0)
+            {
+                fuelUsed = AstroMath.FuelForDeltaV(IspSeconds, WetMassKg, fromRocket);
+                if (fuelUsed > FuelKg + 1e-6) return false;
+                FuelKg -= fuelUsed;
+                if (FuelKg < 0.0) FuelKg = 0.0;
+            }
+
+            if (fromDebug > 0.0)
+                _debugExtraDeltaVLeft -= fromDebug;
+            if (_debugExtraDeltaVLeft < 0.0) _debugExtraDeltaVLeft = 0.0;
             return true;
         }
 
