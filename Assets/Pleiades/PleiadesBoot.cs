@@ -113,7 +113,7 @@ namespace Pleiades
             if (Mathf.Abs(scroll) > 0.01f)
             {
                 var size = cam.orthographicSize * (scroll > 0f ? 0.85f : 1.15f);
-                cam.orthographicSize = Mathf.Clamp(size, 8f, 2500f);
+                cam.orthographicSize = Mathf.Clamp(size, 8f, 8000f);
             }
 
             if (Input.GetMouseButton(1))
@@ -135,11 +135,18 @@ namespace Pleiades
             World.Ship.Orbit.GetPositionMeters(out var x, out _, out var z);
             var ux = (float)AstroMath.MetersToUnits(x);
             var uz = (float)AstroMath.MetersToUnits(z);
+            // Midpoint Earth(0)–ship so cislunar transfer keeps both in frame.
+            var tx = ux * 0.5f;
+            var tz = uz * 0.5f;
             var p = cam.transform.position;
             cam.transform.position = new Vector3(
-                Mathf.Lerp(p.x, ux, 0.18f),
+                Mathf.Lerp(p.x, tx, 0.18f),
                 p.y,
-                Mathf.Lerp(p.z, uz, 0.18f));
+                Mathf.Lerp(p.z, tz, 0.18f));
+            var dist = Mathf.Sqrt(ux * ux + uz * uz);
+            var need = Mathf.Max(dist * 0.7f, 24f);
+            cam.orthographicSize = Mathf.Clamp(
+                Mathf.Lerp(cam.orthographicSize, need, 0.12f), 8f, 8000f);
         }
     }
 }
