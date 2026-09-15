@@ -93,6 +93,9 @@ namespace Pleiades.CoreSim
         {
             if (index < 0) index = 0;
             if (index >= WarpFactors.Length) index = WarpFactors.Length - 1;
+            // Active plan with pending nodes: cap at ×60 so arrive window is not skipped.
+            if (ActivePlan != null && !ActivePlan.AllConsumed && index > 1)
+                index = 1;
             WarpIndex = index;
         }
 
@@ -349,16 +352,28 @@ namespace Pleiades.CoreSim
             return d;
         }
 
-        bool NodeReady(in BurnNode node)
+        /// <summary>
+        /// Leave: anomaly or overdue OK. Arrive: never overdue-only — require anomaly
+        /// near target and/or |r−R2|/R2 &lt; 2% (warp must not fire Δv2 mid-coast).
+        /// </summary>
+        bool NodeReady(in BurnNode node, int index, ManeuverPlan plan)
         {
             if (node.Consumed) return false;
             if (SimTimeSeconds < node.T) return false;
 
-            var overdue = SimTimeSeconds >= node.T + NodeOverdueSeconds;
-            if (overdue) return true;
-
             var nu = Ship.Orbit.TrueAnomalyRad;
-            return AngleDiffAbs(nu, node.TrueAnomalyRad) < NodeAnomalyTolRad;
+            var anomOk = AngleDiffAbs(nu, node.TrueAnomalyRad) < NodeAnomalyTolRad;
+
+            if (index == 0)
+            {
+                if (anomOk) return true;
+                return SimTimeSeconds >= node.T + NodeOverdueSeconds;
+            }
+
+            var r2 = plan.Transfer.R2;
+            var r = Ship.Orbit.RadiusM;
+            var nearR = r2 > 1.0 && System.Math.Abs(r - r2) / r2 < 0.02;
+            return anomOk || nearR;
         }
 
         /// <summary>Fire the next unconsumed ready node (sequential). Impulse only.</summary>
@@ -371,7 +386,7 @@ namespace Pleiades.CoreSim
             {
                 var node = plan.Nodes[i];
                 if (node.Consumed) continue;
-                if (!NodeReady(node)) return;
+                if (!NodeReady(node, i, plan)) return;
 
                 var dvP = node.DvPrograde;
                 var dvR = node.DvRadial;
@@ -475,8 +490,12 @@ namespace Pleiades.CoreSim
             var thrusting = IsThrusting;
             if (thrusting && WarpIndex > 1)
                 WarpIndex = 1;
+            if (ActivePlan != null && !ActivePlan.AllConsumed && WarpIndex > 1)
+                WarpIndex = 1;
 
-            var warp = thrusting ? System.Math.Min(WarpFactor, 60.0) : WarpFactor;
+            var warp = thrusting || (ActivePlan != null && !ActivePlan.AllConsumed)
+                ? System.Math.Min(WarpFactor, 60.0)
+                : WarpFactor;
             var dt = realDeltaSeconds * warp;
             const double maxStep = 120.0;
             while (dt > 0.0)

@@ -36,7 +36,17 @@ namespace Pleiades
             _earth = CreateSphere("Earth", EarthColor, (float)AstroMath.MetersToUnits(GravityBody.Earth.RadiusM));
             _moon = CreateSphere("Moon", MoonColor, Mathf.Max(1.4f, (float)AstroMath.MetersToUnits(GravityBody.Moon.RadiusM)));
             _ship = CreateSphere("Ship", ShipColor, 1.1f);
-            _moonPlanMarker = CreateSphere("MoonPlanTarget", MoonPlanMarkerColor, 1.6f);
+            // Arrival-phase marker (not a second Moon): flat diamond + label color.
+            var markerGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            markerGo.name = "MoonPlanTargetArr";
+            markerGo.transform.SetParent(transform, false);
+            markerGo.transform.localScale = new Vector3(2.2f, 0.35f, 2.2f);
+            markerGo.transform.rotation = Quaternion.Euler(0f, 45f, 0f);
+            var mcol = markerGo.GetComponent<Collider>();
+            if (mcol != null) Object.Destroy(mcol);
+            var mr = markerGo.GetComponent<Renderer>();
+            if (mr != null) mr.material.color = MoonPlanMarkerColor;
+            _moonPlanMarker = markerGo.transform;
             _moonPlanMarker.gameObject.SetActive(false);
 
             var rLeo = GravityBody.Earth.RadiusM + 200_000.0;
