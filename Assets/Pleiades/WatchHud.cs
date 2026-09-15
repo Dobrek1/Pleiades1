@@ -16,7 +16,7 @@ namespace Pleiades
         bool _stylesReady;
 
         /// <summary>Shown in HUD so Play can confirm the exe matches git.</summary>
-        public const string BuildId = "retarget";
+        public const string BuildId = "honest-slot";
 
         public void Bind(SimWorld world)
         {

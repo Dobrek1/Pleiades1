@@ -179,9 +179,15 @@ namespace Pleiades.CoreSim
         }
 
         /// <summary>
-        /// One snapshot: current r,v → Hohmann geometry to circular R2.
-        /// Leave Δv is vectorial (VisViva on transfer at r_now minus current v),
-        /// not circular-orbit Δv applied onto an ellipse.
+        /// Nearly-circular threshold for classic Hohmann leave (contract «честный слот»).
+        /// </summary>
+        public const double NearlyCircularEccentricity = 0.01;
+
+        /// <summary>
+        /// One snapshot of ship r,v → transfer to circular R_slot.
+        /// e ≲ 0.01: classic Hohmann leave (prograde ±Δv1).
+        /// Else: vector leave so transfer has {r_now, R_slot} as peri/apo (VisViva).
+        /// Arrive is always circularize to R_slot (see TryFireReadyPlanNodes).
         /// </summary>
         bool TryComputeTransferFromCurrentState(
             double r2,
@@ -209,17 +215,58 @@ namespace Pleiades.CoreSim
                 failRu = "Некорректный радиус слота";
                 return false;
             }
-            if (System.Math.Abs(r2 - r1) / System.Math.Max(r1, r2) < 1e-4)
+
+            var nearR = System.Math.Abs(r2 - r1) / System.Math.Max(r1, r2) < 1e-4;
+            var e0 = o.Eccentricity;
+            if (nearR && e0 <= NearlyCircularEccentricity)
             {
                 failRu = "Уже на этом радиусе";
                 return false;
             }
 
+            // Degenerate Hohmann (r≈R_slot) on an ellipse → circularize-only (leave Δv = 0).
+            if (nearR)
+            {
+                var muNear = o.Mu;
+                transfer = Hohmann.Compute(muNear, r2, r2);
+                transfer.R1 = r1;
+                transfer.R2 = r2;
+                transfer.SemiMajor = r2;
+                transfer.DepartureDeltaV = 0.0;
+                transfer.TimeOfFlightSeconds = 0.0;
+                leavePhaseRad = System.Math.Atan2(o.Rz, o.Rx);
+                leaveDvP = 0.0;
+                leaveDvR = 0.0;
+                // Arrival Δv ≈ |v − v_circ| at current state (preview); execute snaps via SetCircularRadius.
+                var vCirc = AstroMath.CircularSpeed(muNear, r2);
+                var hNear = o.Rx * o.Vz - o.Rz * o.Vx;
+                double vxC, vzC;
+                var c = o.Rx / r1;
+                var s = o.Rz / r1;
+                if (hNear >= 0.0) { vxC = -vCirc * s; vzC = vCirc * c; }
+                else { vxC = vCirc * s; vzC = -vCirc * c; }
+                var dvxC = vxC - o.Vx;
+                var dvzC = vzC - o.Vz;
+                transfer.ArrivalDeltaV = System.Math.Sqrt(dvxC * dvxC + dvzC * dvzC);
+                transfer.TotalDeltaV = transfer.ArrivalDeltaV;
+                return true;
+            }
+
             var mu = o.Mu;
             transfer = Hohmann.Compute(mu, r1, r2);
             leavePhaseRad = System.Math.Atan2(o.Rz, o.Rx);
+            var raising = r2 >= r1;
+            var sign = raising ? 1.0 : -1.0;
 
-            // Desired velocity on transfer ellipse at current r (peri if raising, apo if lowering).
+            if (e0 <= NearlyCircularEccentricity)
+            {
+                // Classic Hohmann leave on a nearly circular orbit.
+                leaveDvP = sign * transfer.DepartureDeltaV;
+                leaveDvR = 0.0;
+                return true;
+            }
+
+            // Elliptical: vector v → v_transfer (tangential VisViva at r_now on a={r_now,R_slot}).
             var a = transfer.SemiMajor;
             var vDesMag = AstroMath.VisViva(mu, r1, a);
             var h = o.Rx * o.Vz - o.Rz * o.Vx;
@@ -272,9 +319,37 @@ namespace Pleiades.CoreSim
             var nu0 = Ship.Orbit.TrueAnomalyRad;
             var raising = transfer.R2 >= transfer.R1;
             var sign = raising ? 1.0 : -1.0;
+            // Circularize-only (r≈R_slot on ellipse): skip leave impulse, arrive immediately.
+            var circOnly = tof <= 1e-6 && System.Math.Abs(preview.LeaveDvPrograde) < 1e-6
+                && System.Math.Abs(preview.LeaveDvRadial) < 1e-6;
 
             var moonN = 2.0 * System.Math.PI / MoonSiderealPeriodSeconds;
             var moonAtArr = KeplerOrbit.WrapAngle(MoonAnomalyRad + tof * moonN);
+
+            if (circOnly)
+            {
+                plan = new ManeuverPlan
+                {
+                    Slot = slot,
+                    Transfer = transfer,
+                    LeavePhaseRad = preview.LeavePhaseRad,
+                    ArrivalSimTime = now,
+                    TargetMoonAnomalyAtArrival = moonAtArr,
+                    Nodes = new[]
+                    {
+                        new BurnNode
+                        {
+                            T = now,
+                            TrueAnomalyRad = KeplerOrbit.WrapAngle(nu0),
+                            DvPrograde = sign * transfer.ArrivalDeltaV,
+                            DvRadial = 0.0,
+                            Consumed = false,
+                            CircularizeToRadiusM = slot.RadiusM,
+                        },
+                    },
+                };
+                return true;
+            }
 
             plan = new ManeuverPlan
             {
@@ -297,9 +372,11 @@ namespace Pleiades.CoreSim
                     {
                         T = tArr,
                         TrueAnomalyRad = KeplerOrbit.WrapAngle(nu0 + System.Math.PI),
+                        // Preview magnitude; execute snaps via CircularizeToRadiusM.
                         DvPrograde = sign * transfer.ArrivalDeltaV,
                         DvRadial = 0.0,
                         Consumed = false,
+                        CircularizeToRadiusM = slot.RadiusM,
                     },
                 },
             };
@@ -495,7 +572,20 @@ namespace Pleiades.CoreSim
 
                 var dvP = node.DvPrograde;
                 var dvR = node.DvRadial;
-                var mag = System.Math.Sqrt(dvP * dvP + dvR * dvR);
+                var circR = node.CircularizeToRadiusM;
+                double mag;
+                if (circR > 0.0)
+                {
+                    // Arrive = vector circularize / SetCircularRadius(R_slot): peri≈apo≈R_slot.
+                    mag = DeltaVToCircularRadius(circR);
+                    if (mag < 0.5)
+                        mag = System.Math.Sqrt(dvP * dvP + dvR * dvR);
+                }
+                else
+                {
+                    mag = System.Math.Sqrt(dvP * dvP + dvR * dvR);
+                }
+
                 if (!Ship.TryBurn(mag, out _))
                 {
                     RaiseInterrupt("Топливо: не хватает на импульс плана B");
@@ -503,7 +593,14 @@ namespace Pleiades.CoreSim
                     return;
                 }
 
-                Ship.Orbit.ApplyDeltaV(dvP, dvR);
+                if (circR > 0.0)
+                {
+                    Ship.Orbit.SetCircularRadius(circR);
+                }
+                else
+                {
+                    Ship.Orbit.ApplyDeltaV(dvP, dvR);
+                }
                 node.Consumed = true;
                 plan.Nodes[i] = node;
                 Phase = FlightPhase.Coast;
@@ -512,7 +609,7 @@ namespace Pleiades.CoreSim
                 {
                     ClearActivePlanAndDestination();
                     Phase = FlightPhase.Arrived;
-                    RaiseInterrupt("У цели (план B). C — циркуляризовать если нужно.");
+                    RaiseInterrupt("У цели (план B): круговая на слоте.");
                     WarpIndex = 0;
                 }
                 return; // one impulse per call; next node waits for its T/anomaly
@@ -536,6 +633,38 @@ namespace Pleiades.CoreSim
         {
             var scale = System.Math.Max(System.Math.Abs(b), 1.0);
             return System.Math.Abs(a - b) / scale < 1e-6;
+        }
+
+        /// <summary>|Δv| from current state to circular orbit at radiusM (phase kept by SetCircularRadius).</summary>
+        double DeltaVToCircularRadius(double radiusM)
+        {
+            var o = Ship.Orbit;
+            var r = System.Math.Max(radiusM, GravityBody.Earth.RadiusM + 80_000.0);
+            var vCirc = AstroMath.CircularSpeed(o.Mu, r);
+            var phase = o.TrueAnomalyRad;
+            var c = System.Math.Cos(phase);
+            var s = System.Math.Sin(phase);
+            var h = o.Rx * o.Vz - o.Rz * o.Vx;
+            double vxDes, vzDes;
+            if (h >= 0.0)
+            {
+                vxDes = -vCirc * s;
+                vzDes = vCirc * c;
+            }
+            else
+            {
+                vxDes = vCirc * s;
+                vzDes = -vCirc * c;
+            }
+            // Compare at target r on the same phase ray (matches SetCircularRadius).
+            var rxT = r * c;
+            var rzT = r * s;
+            // Use current velocity vs desired circular at target; if far from r, still charge planned shape.
+            var dvx = vxDes - o.Vx;
+            var dvz = vzDes - o.Vz;
+            _ = rxT;
+            _ = rzT;
+            return System.Math.Sqrt(dvx * dvx + dvz * dvz);
         }
 
         /// <summary>

@@ -10,6 +10,11 @@ namespace Pleiades.CoreSim
         public double DvPrograde;
         public double DvRadial;
         public bool Consumed;
+        /// <summary>
+        /// If &gt; 0, fire = charge |Δv| then SetCircularRadius(this) (honest slot arrive).
+        /// 0 = ordinary ApplyDeltaV(DvPrograde, DvRadial).
+        /// </summary>
+        public double CircularizeToRadiusM;
     }
 
     /// <summary>
