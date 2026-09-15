@@ -113,10 +113,26 @@ namespace Pleiades.CoreSim
             WarpIndex = 0;
         }
 
+        /// <summary>Preview only — never burns. Changing slot while a plan is live cancels it.</summary>
         public void SelectSlot(OrbitSlot slot)
         {
+            if (ActivePlan != null && !ActivePlan.AllConsumed)
+            {
+                if (slot == null || SelectedSlot == null || slot.Id != SelectedSlot.Id)
+                    CancelPlan();
+            }
             SelectedSlot = slot;
         }
+
+        /// <summary>Drop armed nodes without applying any impulse.</summary>
+        public void CancelPlan()
+        {
+            ClearActivePlanAndDestination();
+            Phase = FlightPhase.Coast;
+        }
+
+        public bool HasLivePlan =>
+            ActivePlan != null && !ActivePlan.AllConsumed;
 
         public SlotPlanResult PreviewSelectedSlot() => PreviewSlot(SelectedSlot);
 
@@ -221,6 +237,10 @@ namespace Pleiades.CoreSim
                     RaiseInterrupt("Сбросьте тягу перед авто-уходом");
                 return false;
             }
+
+            // Never stack leave burns: cancel live plan first (no impulse), then arm fresh.
+            if (HasLivePlan)
+                CancelPlan();
 
             if (!TryBuildPlanForSelectedSlot(out var plan, out var failRu))
             {

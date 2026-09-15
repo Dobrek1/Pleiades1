@@ -148,7 +148,19 @@ namespace Pleiades
             y += 4f;
             if (GUI.Button(new Rect(x, y, 200f, 28f), "Исполнить уход"))
                 _world.TryDepartSelectedSlot();
+            if (_world.HasLivePlan)
+            {
+                if (GUI.Button(new Rect(x + 210f, y, 140f, 28f), "Отменить план"))
+                    _world.CancelPlan();
+            }
             y += 34f;
+
+            if (_world.HasLivePlan)
+            {
+                GUI.Label(new Rect(x, y, w - 20f, line),
+                    "План жив → варп ≤×60 (после отмены/прибытия снова 1/60/3600/86400)", _debug);
+                y += line + 2f;
+            }
 
             // Armed Layer B plan nodes
             var armed = _world.ActivePlan;
