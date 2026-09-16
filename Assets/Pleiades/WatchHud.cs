@@ -231,6 +231,18 @@ namespace Pleiades
                 GUI.Box(new Rect(pad, pad + boxH + 8f, w, 70f), GUIContent.none);
                 GUI.Label(new Rect(x, pad + boxH + 16f, w - 20f, 54f), "⚠ " + _world.LastInterruptRu, _warn);
             }
+
+            // Version stamp — bottom-right (Play can confirm exe)
+            var ver = "ver " + BuildId;
+            var verStyle = new GUIStyle(_body)
+            {
+                alignment = TextAnchor.LowerRight,
+                fontSize = 13,
+                normal = { textColor = new Color(0.7f, 0.75f, 0.85f, 0.95f) }
+            };
+            const float verW = 280f;
+            const float verH = 22f;
+            GUI.Label(new Rect(Screen.width - verW - 10f, Screen.height - verH - 8f, verW, verH), ver, verStyle);
         }
 
         static string FormatTime(double seconds)
